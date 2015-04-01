@@ -53,7 +53,7 @@ CFLAGS	+= $(shell $(CC) -fno-stack-protector -E -x c /dev/null >/dev/null 2>&1 &
 else
 HOSTCC		:= clang
 HOSTCFLAGS	:= -g -Wall -O2
-CC		:= clang
+CC		:= $(GCCPREFIX)clang
 CFLAGS	:= -fno-builtin -Wall -g -m32 -mno-sse -nostdinc $(DEFS)
 CFLAGS	+= $(shell $(CC) -fno-stack-protector -E -x c /dev/null >/dev/null 2>&1 && echo -fno-stack-protector)
 endif
@@ -205,16 +205,26 @@ endif
 TARGETS: $(TARGETS)
 
 .DEFAULT_GOAL := TARGETS
-
 .PHONY: qemu qemu-nox debug debug-nox
+
+# new content: lab1-mon debug-mon
+lab1-mon: $(UCOREIMG)
+	$(V)$(TERMINAL) -e "$(QEMU) -S -s -d in_asm -D $(BINDIR)/q.log -monitor stdio -hda $< -serial null"
+	$(V)sleep 2
+	$(V)$(TERMINAL) -e "gdb -q -x tools/lab1init"
+debug-mon: $(UCOREIMG)
+#	$(V)$(QEMU) -S -s -monitor stdio -hda $< -serial null &
+	$(V)$(TERMINAL) -e "$(QEMU) -S -s -monitor stdio -hda $< -serial null"
+	$(V)sleep 2
+	$(V)$(TERMINAL) -e "gdb -q -x tools/moninit"
+
 qemu-mon: $(UCOREIMG)
-	$(V)$(QEMU)  -no-reboot -monitor stdio -hda $< -serial null
+	$(V)$(QEMU) -monitor stdio -hda $< -serial null
 qemu: $(UCOREIMG)
-	$(V)$(QEMU) -no-reboot -parallel stdio -hda $< -serial null
-log: $(UCOREIMG)
-	$(V)$(QEMU) -no-reboot -d int,cpu_reset  -D q.log -parallel stdio -hda $< -serial null
+	$(V)$(QEMU) -parallel stdio -hda $< -serial null
+
 qemu-nox: $(UCOREIMG)
-	$(V)$(QEMU)   -no-reboot -serial mon:stdio -hda $< -nographic
+	$(V)$(QEMU) -serial mon:stdio -hda $< -nographic
 TERMINAL        :=gnome-terminal
 debug: $(UCOREIMG)
 	$(V)$(QEMU) -S -s -parallel stdio -hda $< -serial null &

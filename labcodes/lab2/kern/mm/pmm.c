@@ -171,8 +171,7 @@ free_pages(struct Page *base, size_t n) {
     local_intr_restore(intr_flag);
 }
 
-//nr_free_pages - call pmm->nr_free_pages to get the size (nr*PAGESIZE) 
-//of current free memory
+//nr_free_pages - call pmm->nr_free_pages to get the size (nr*PAGESIZE) of current free memory
 size_t
 nr_free_pages(void) {
     size_t ret;
@@ -345,20 +344,28 @@ pmm_init(void) {
 //  la:     the linear address need to map
 //  create: a logical value to decide if alloc a page for PT
 // return vaule: the kernel virtual address of this pte
+
+//get_pte：得到得到页表项，并返回虚拟地址la对应的pte；如果线性地址或逻辑地址没有对应的页表项，则需要去创建一个页表项
+//参数：
+//  pgdir: PDT的内核虚拟基址
+//  la: 需要去映射的线性地址
+//  create: 标记时候去创建一个页表项
+//返回值：该页表项的内核虚拟地址
+
 pte_t *
 get_pte(pde_t *pgdir, uintptr_t la, bool create) {
-    /* LAB2 EXERCISE 2: YOUR CODE
+    /* LAB2 EXERCISE 2: 2012011361
      *
      * If you need to visit a physical address, please use KADDR()
-     * please read pmm.h for useful macros
+     * please read pmm.h for useful macros(宏命令)
      *
      * Maybe you want help comment, BELOW comments can help you finish the code
      *
-     * Some Useful MACROs and DEFINEs, you can use them in below implementation.
+     * Some Useful MACROs（宏命令） and DEFINEs（定义）, you can use them in below implementation.
      * MACROs or Functions:
      *   PDX(la) = the index of page directory entry of VIRTUAL ADDRESS la.
      *   KADDR(pa) : takes a physical address and returns the corresponding kernel virtual address.
-     *   set_page_ref(page,1) : means the page be referenced by one time
+     *   set_page_ref(page,1) : means the page be referenced（引用） by one time
      *   page2pa(page): get the physical address of memory which this (struct Page *) page  manages
      *   struct Page * alloc_page() : allocation a page
      *   memset(void *s, char c, size_t n) : sets the first n bytes of the memory area pointed by s
@@ -380,6 +387,29 @@ get_pte(pde_t *pgdir, uintptr_t la, bool create) {
     }
     return NULL;          // (8) return page table entry
 #endif
+
+    int index = PDX(la);
+    pde_t *pdep = &pgdir[index];
+
+    bool isPresent = (*pdep) & PTE_P;
+    if (isPresent == 0) { //页表项不存在
+    	if (create) { //创建是必要的
+    		struct Page *page = alloc_page();
+    		if (page == NULL) { //创建出错
+    			return NULL;
+    		}
+    		set_page_ref(page,1);
+    		uintptr_t pa = page2pa(page); //得到该页表对应的物理地址
+    		memset(KADDR(pa), 0, PGSIZE); //PGSIZE为4096个字节
+    		*pdep = pa | PTE_U | PTE_W | PTE_P;
+    	}
+    	else {
+    		return NULL;
+    	}
+    }
+    index = PTX(la);
+    return &((pte_t *)KADDR(PDE_ADDR(*pdep)))[index];
+
 }
 
 //get_page - get related Page struct for linear address la using PDT pgdir
@@ -398,11 +428,15 @@ get_page(pde_t *pgdir, uintptr_t la, pte_t **ptep_store) {
 //page_remove_pte - free an Page sturct which is related linear address la
 //                - and clean(invalidate) pte which is related linear address la
 //note: PT is changed, so the TLB need to be invalidate 
+
+//page_remove_pte：释放与线性地址la相关的页表，并清楚与la相关的pte
+//注意：PT改变，TLB将失效
+
 static inline void
 page_remove_pte(pde_t *pgdir, uintptr_t la, pte_t *ptep) {
-    /* LAB2 EXERCISE 3: YOUR CODE
+    /* LAB2 EXERCISE 3: 2012011361
      *
-     * Please check if ptep is valid, and tlb must be manually updated if mapping is updated
+     * Please check if ptep is valid, and tlb must be manually updated（手动更新）if mapping is updated
      *
      * Maybe you want help comment, BELOW comments can help you finish the code
      *
@@ -410,7 +444,7 @@ page_remove_pte(pde_t *pgdir, uintptr_t la, pte_t *ptep) {
      * MACROs or Functions:
      *   struct Page *page pte2page(*ptep): get the according page from the value of a ptep
      *   free_page : free a page
-     *   page_ref_dec(page) : decrease page->ref. NOTICE: ff page->ref == 0 , then this page should be free.
+     *   page_ref_dec(page) : decrease page->ref. NOTICE: if page->ref == 0 , then this page should be free.
      *   tlb_invalidate(pde_t *pgdir, uintptr_t la) : Invalidate a TLB entry, but only if the page tables being
      *                        edited are the ones currently in use by the processor.
      * DEFINEs:
@@ -425,6 +459,17 @@ page_remove_pte(pde_t *pgdir, uintptr_t la, pte_t *ptep) {
                                   //(6) flush tlb
     }
 #endif
+
+    bool isPresent = (*ptep) & PTE_P;
+    if (isPresent == 1) {
+    	struct Page *page = pte2page(*ptep);
+    	page_ref_dec(page);
+    	if (page->ref == 0) {
+    		free_page(page);
+    	}
+    	*ptep = 0;
+    	tlb_invalidate(pgdir, la);
+    }
 }
 
 //page_remove - free an Page which is related linear address la and has an validated pte
