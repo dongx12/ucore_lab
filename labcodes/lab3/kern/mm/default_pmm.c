@@ -9,13 +9,13 @@
    usually split, and the remainder added to the list as another free block.
    Please see Page 196~198, Section 8.2 of Yan Wei Ming's chinese book "Data Structure -- C programming language"
 */
-// LAB2 EXERCISE 1: YOUR CODE
+// LAB2 EXERCISE 1: 2012011361
 // you should rewrite functions: default_init,default_init_memmap,default_alloc_pages, default_free_pages.
 /*
  * Details of FFMA
  * (1) Prepare: In order to implement the First-Fit Mem Alloc (FFMA), we should manage the free mem block use some list.
  *              The struct free_area_t is used for the management of free mem blocks. At first you should
- *              be familiar to the struct list in list.h. struct list is a simple doubly linked list implementation.
+ *              be familiar to the struct list in list.h. struct list is a simple doubly linked list (双向链表) implementation.
  *              You should know howto USE: list_init, list_add(list_add_after), list_add_before, list_del, list_next, list_prev
  *              Another tricky method is to transform a general list struct to a special struct (such as struct page):
  *              you can find some MACRO: le2page (in memlayout.h), (in future labs: le2vma (in vmm.h), le2proc (in proc.h),etc.)
@@ -25,7 +25,7 @@
  *              This fun is used to init a free block (with parameter: addr_base, page_number).
  *              First you should init each page (in memlayout.h) in this free block, include:
  *                  p->flags should be set bit PG_property (means this page is valid. In pmm_init fun (in pmm.c),
- *                  the bit PG_reserved is setted in p->flags)
+ the bit PG_reserved is setted in p->flags)
  *                  if this page  is free and is not the first page of free block, p->property should be set to 0.
  *                  if this page  is free and is the first page of free block, p->property should be set to total num of block.
  *                  p->ref should be 0, because now p is free and no reference.
@@ -61,82 +61,127 @@ free_area_t free_area;
 
 static void
 default_init(void) {
-    list_init(&free_list);
-    nr_free = 0;
+    list_init(&free_list); //free_list是用来记录空闲的内存块
+    nr_free = 0; //nr_free是记录空闲内存块的页的个数
 }
 
 static void
 default_init_memmap(struct Page *base, size_t n) {
     assert(n > 0);
+    //首先需要初始化该空闲块中的每个页
     struct Page *p = base;
-    for (; p != base + n; p ++) {
+    for (; p != base + n; p++) {
         assert(PageReserved(p));
-        p->flags = p->property = 0;
-        set_page_ref(p, 0);
+        p->flags = 0;
+        SetPageProperty(p); //设置p->flags
+        p->property = 0;    //设置p->property
+        set_page_ref(p, 0); //设置 p->ref
+        list_add_before(&free_list, &(p->page_link));
     }
+    //base是该空闲块中的第一个page，并且是free的，故property赋值为n
     base->property = n;
-    SetPageProperty(base);
+    //最后更新nf_free的值
     nr_free += n;
-    list_add(&free_list, &(base->page_link));
 }
 
+
+//在free_list中寻找第一个空闲块（要求块大小>=n），调整该空闲块的大小，并返回分配的内存块的地址
 static struct Page *
 default_alloc_pages(size_t n) {
     assert(n > 0);
-    if (n > nr_free) {
+    if (n > nr_free) { //如果所有空闲块的大小都不能满足分配要求，则返回
         return NULL;
     }
-    struct Page *page = NULL;
+
     list_entry_t *le = &free_list;
+    list_entry_t *pageList;
+
+    //寻找第一个空闲块
     while ((le = list_next(le)) != &free_list) {
-        struct Page *p = le2page(le, page_link);
-        if (p->property >= n) {
-            page = p;
-            break;
+        struct Page *block = le2page(le, page_link);
+        if (block->property >= n) {
+        	int index=0;
+        	//如果找到了合适的空闲块，说明该块的前n个页可以被分配出去，此时需要做一些设置
+        	for (index=0; index<n; index++) {
+        		pageList = list_next(le);
+        		struct Page *singlePage = le2page(le, page_link);
+        		SetPageReserved(singlePage);    //PG_reserved =1
+        		ClearPageProperty(singlePage);  //PG_property =0
+        		list_del(le);                   //unlink the pages from free_list
+        		le = pageList;
+        	}
+        	//如果该空闲块过大，需要再重新计算大小
+        	if (block->property > n) {
+        		(le2page(le,page_link))->property = block->property - n;
+        	}
+        	ClearPageProperty(block);
+        	SetPageReserved(block);
+        	nr_free -= n;
+            return block;
         }
     }
-    if (page != NULL) {
-        list_del(&(page->page_link));
-        if (page->property > n) {
-            struct Page *p = page + n;
-            p->property = page->property - n;
-            list_add(&free_list, &(p->page_link));
-    }
-        nr_free -= n;
-        ClearPageProperty(page);
-    }
-    return page;
+    //如果没有找到返回NULL
+    return NULL;
 }
+
+/*
+default_free_pages: relink the pages into  free list, maybe merge small free blocks into big free blocks.
+*               (5.1) according the base addr of withdrawed blocks, search free list, find the correct position
+*                     (from low to high addr), and insert the pages. (may use list_next, le2page, list_add_before)
+*               (5.2) reset the fields of pages, such as p->ref, p->flags (PageProperty)
+*               (5.3) try to merge low addr or high addr blocks. Notice: should change some pages's p->property correctly.
+*/
 
 static void
 default_free_pages(struct Page *base, size_t n) {
     assert(n > 0);
-    struct Page *p = base;
-    for (; p != base + n; p ++) {
-        assert(!PageReserved(p) && !PageProperty(p));
-        p->flags = 0;
-        set_page_ref(p, 0);
+    assert(PageReserved(base));
+
+    //遍历空闲块链表，找到合适的位置插入回收的地址块
+    list_entry_t *site = &free_list;
+    struct Page *page = NULL;
+    //寻找第一个空闲块
+    while ((site = list_next(site)) != &free_list) {
+    	page = le2page(site, page_link);
+        if (page > base) {
+            break;
+        }
     }
+    //插入回收的空闲块：按页插入
+    for (page=base; page<(base+n); page++) {
+    	list_add_before(site, &(page->page_link));
+    }
+
+    //重置该块的字段
+    base->flags = 0;
     base->property = n;
+    set_page_ref(base, 0);
+    ClearPageProperty(base);
     SetPageProperty(base);
-    list_entry_t *le = list_next(&free_list);
-    while (le != &free_list) {
-        p = le2page(le, page_link);
-        le = list_next(le);
-        if (base + base->property == p) {
-            base->property += p->property;
-            ClearPageProperty(p);
-            list_del(&(p->page_link));
-        }
-        else if (p + p->property == base) {
-            p->property += base->property;
-            ClearPageProperty(base);
-            base = p;
-            list_del(&(p->page_link));
-        }
+
+    //尝试合并地址相连的空闲地址块
+    //先查看后一个空闲块
+    page = le2page(site, page_link); //得到后一个空闲块起始地址
+    if ((base+n) == page) {
+    	base->property += page->property;
+    	page->property = 0;
+    }
+    //后查看前一个空闲块
+    site = list_prev(&(base->page_link));
+    page = le2page(site, page_link); //此时并不是前一个空闲块，而是前一个page
+    if ((site!= &free_list) && page == (base-1)) {
+    	while (site!= &free_list) {
+    		if (page->property > 0) {
+    			page->property += base->property;
+    			base->property =0;
+    			break;
+    		}
+    		site = list_prev(site);
+    		page = le2page(site, page_link);
+    	}
     }
     nr_free += n;
-    list_add(&free_list, &(base->page_link));
+    return;
 }
 
 static size_t
