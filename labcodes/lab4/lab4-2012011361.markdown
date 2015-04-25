@@ -1,0 +1,157 @@
+# Lab4实验报告
+本次实验将首先接触的是内核线程的管理。内核线程是一种特殊的进程，内核线程与用户进程的区别有两个：
+>* 内核线程只运行在内核态
+>* 用户进程会在在用户态和内核态交替运行
+
+所有内核线程共用ucore内核内存空间，不需为每个内核线程维护单独的内存空间
+而用户进程需要维护各自的用户内存空间
+相关原理介绍可看附录B：【原理】进程/线程的属性与特征解析。
+
+标签（空格分隔）： ucore-lab
+
+---
+
+## 练习0：填写已有实验
+
+本实验依赖实验1/2/3。请把你做的实验1/2/3的代码填入本实验中代码中有“LAB1”,“LAB2”,“LAB3”的注释相应部分。
+> 答：已经完成前三次代码的移植
+
+---
+
+## 练习1：分配并初始化一个进程控制块（需要编码）
+
+alloc_proc函数（位于kern/process/proc.c中）负责分配并返回一个新的struct proc_struct结构，用于存储新建立的内核线程的管理信息。ucore需要对这个结构进行最基本的初始化，你需要完成这个初始化过程。
+
+【提示】在alloc_proc函数的实现中，需要初始化的proc_struct结构中的成员变量至少包括：state/pid/runs/kstack/need_resched/parent/mm/context/tf/cr3/flags/name。
+请在实验报告中简要说明你的设计实现过程。
+> 答：这部分主要是初始化，所以根据注释的提示将所有需要初始化的变量初始为0或空或给定的值即可：其中pid表示线程的ID，所以初始化为-1而不是0；cr3表示页表的起始地址，当为内核线程时为boot_cr3，即ucore启动时建立好的内核虚拟空间的页表首地址；content和name初始化为给定的值。代码如下所示：
+```
+proc->state = PROC_UNINIT; //PROC_UNINIT = 0; uninitialized
+proc->pid = -1;
+proc->runs = 0;
+proc->kstack = 0;
+proc->need_resched = 0;
+proc->parent = NULL;
+proc->mm = NULL;
+memset(&(proc->context), 0, sizeof(struct context));
+proc->tf = NULL;
+proc->cr3 = boot_cr3;
+proc->flags = 0;
+memset(proc->name, 0, PROC_NAME_LEN); //#define PROC_NAME_LEN 15
+```
+
+请回答如下问题：请说明proc_struct中struct context context和struct trapframe *tf成员变量含义和在本实验中的作用是啥？（提示通过看代码和编程调试可以判断出来）
+> 答：context是进程的上下文，用于进程切换，在ucore中，所有进程在内核中是相对独立的，使用context保存寄存器的目的是在内核中进行上下文的切换；在switch.S中定义的函数switch_to利用content进行上下文切换。
+trapframe是中断帧，中断帧记录了进程在被中断前的状态，当内核需要跳回到用户空间时，需要调整中断帧以恢复让进程继续执行的各寄存器的值。
+
+---
+
+## 练习2：为新创建的内核线程分配资源（需要编码）
+
+创建一个内核线程需要分配和设置好很多资源。kernel_thread函数通过调用do_fork函数完成具体内核线程的创建工作。do_kernel函数会调用alloc_proc函数来分配并初始化一个进程控制块，但alloc_proc只是找到了一小块内存用以记录进程的必要信息，并没有实际分配这些资源。ucore一般通过do_fork实际创建新的内核线程。do_fork的作用是，创建当前内核线程的一个副本，它们的执行上下文、代码、数据都一样，但是存储位置不同。在这个过程中，需要给新内核线程分配资源，并且复制原进程的状态。你需要完成在kern/process/proc.c中的do_fork函数中的处理过程。它的大致执行步骤包括：
+
+调用alloc_proc，首先获得一块用户信息块。
+为进程分配一个内核栈。
+复制原进程的内存管理信息到新进程（但内核线程不必做此事）
+复制原进程上下文到新进程
+将新进程添加到进程列表
+唤醒新进程
+返回新进程号
+请在实验报告中简要说明你的设计实现过程。请回答如下问题：
+> 答：实现如下所示：
+```
+//1. call alloc_proc to allocate a proc_struct
+proc = alloc_proc();
+if (proc == NULL)
+    goto fork_out;
+proc->parent = current;
+// 2. call setup_kstack to allocate a kernel stack for child process
+if (setup_kstack(proc) != 0)
+    goto bad_fork_cleanup_proc;
+// 3. call copy_mm to dup OR share mm according clone_flag
+if (copy_mm(clone_flags, proc) != 0)
+    goto bad_fork_cleanup_kstack;
+// 4. call copy_thread to setup tf & context in proc_struct
+//copy_thread(struct proc_struct *proc, uintptr_t esp, struct trapframe *tf);
+copy_thread(proc, stack, tf);
+// 5. insert proc_struct into hash_list && proc_list
+proc->pid = get_pid();
+hash_proc(proc);
+list_add(&proc_list, &(proc->list_link));
+nr_process ++;
+// 6. call wakup_proc to make the new child process RUNNABLE
+wakeup_proc(proc);
+// 7. set ret vaule using child proc's pid
+ret = proc->pid;
+```
+
+请说明ucore是否做到给每个新fork的线程一个唯一的id？请说明你的分析和理由。
+> 答:ucore中每个新fork的线程都有一个唯一的ID，从get_pid()函数的实现中可知：
+```
+// get_pid - alloc a unique pid for process
+static int
+get_pid(void) {
+    static_assert(MAX_PID > MAX_PROCESS);
+    struct proc_struct *proc;
+    list_entry_t *list = &proc_list, *le;
+    static int next_safe = MAX_PID, last_pid = MAX_PID;
+    if (++ last_pid >= MAX_PID) {
+        last_pid = 1;
+        goto inside;
+    }
+    if (last_pid >= next_safe) {
+    inside:
+        next_safe = MAX_PID;
+    repeat:
+        le = list;
+        while ((le = list_next(le)) != list) {
+            proc = le2proc(le, list_link);
+            if (proc->pid == last_pid) {
+                if (++ last_pid >= next_safe) {
+                    if (last_pid >= MAX_PID) {
+                        last_pid = 1;
+                    }
+                    next_safe = MAX_PID;
+                    goto repeat;
+                }
+            }
+            else if (proc->pid > last_pid && next_safe > proc->pid) {
+                next_safe = proc->pid;
+            }
+        }
+    }
+    return last_pid;
+}
+```
+> 这段代码主要是为了找到一个唯一的pid的值赋给每个进程，利用last_pid和next_safe作为两个端点，递归查找可用的ID值。
+
+---
+
+## 练习3：阅读代码，理解 proc_run 函数和它调用的函数如何完成进程切换的。（无编码工作）
+
+请在实验报告中简要说明你对proc_run函数的分析。并回答如下问题：
+> 答：proc_run()函数如下所示：
+```
+// proc_run - make process "proc" running on cpu
+// NOTE: before call switch_to, should load  base addr of "proc"'s new PDT
+void
+proc_run(struct proc_struct *proc) {
+    if (proc != current) {
+        bool intr_flag;
+        struct proc_struct *prev = current, *next = proc;
+        local_intr_save(intr_flag);
+        {
+            current = proc;
+            load_esp0(next->kstack + KSTACKSIZE);
+            lcr3(next->cr3);
+            switch_to(&(prev->context), &(next->context));
+        }
+        local_intr_restore(intr_flag);
+    }
+}
+```
+> 该函数时进行进程切换的函数，即将进程切换到proc进程，方法是先判断当前进程是否是proc，如果不是要进行进程切换，同时要判断是否需要进行中断屏蔽，如果需要则先保存现场，进行进程的切换，包括设置内核堆栈和改变cr3寄存器的值，以及通过switch_to函数进行上下文的切换，之后再恢复中断屏蔽。
+
+在本实验的执行过程中，创建且运行了几个内核线程？
+语句local_intr_save(intr_flag);....local_intr_restore(intr_flag);在这里有何作用?请说明理由
+> 答：本次实验中共创建了两个内核线程idleproc和initproc；local_intr_save是将中断响应关闭，避免在进行进程切换的时候被打断；local_intr_restore是在进程切换后将中断响应开启。
