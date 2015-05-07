@@ -1,0 +1,121 @@
+# Lab6实验报告
+>* 理解操作系统的调度管理机制
+>* 熟悉 ucore 的系统调度器框架，以及缺省的Round-Robin 调度算法
+>* 基于调度器框架实现一个(Stride Scheduling)调度算法来替换缺省的调度算法
+
+标签（空格分隔）： ucore-lab
+
+---
+
+## 练习0：填写已有实验
+
+本实验依赖实验1/2/3/4/5。请把你做的实验1/2/3/4/5的代码填入本实验中代码中有“LAB1”/“LAB2”/“LAB3”/“LAB4”“LAB5”的注释相应部分。并确保编译通过。注意：为了能够正确执行lab6的测试应用程序，可能需对已完成的实验1/2/3/4/5的代码进行进一步改进。
+> 答：已完成前5次lab的移植工作，部分需要更新如下所示：
+(1). LAB1:EXERCISE3的kern/trap/trap.c中需要更新：
+```
+case IRQ_OFFSET + IRQ_TIMER:
+    ticks++;
+    assert(current != NULL);
+    run_timer_list();
+    break;
+```
+(2). LAB4:EXERCISE1的kern/process/proc.c中的alloc_proc需要更新：
+```
+//LAB6 YOUR CODE : (update LAB5 steps)
+/*
+ * below fields(add in LAB6) in proc_struct need to be initialized
+ * struct run_queue *rq;            // running queue contains Process
+ * list_entry_t run_link;           // the entry linked in run queue
+ * int time_slice;                  // time slice for occupying the CPU
+ * skew_heap_entry_t lab6_run_pool; // FOR LAB6 ONLY: the entry in the run pool
+ * uint32_t lab6_stride;            // FOR LAB6 ONLY: the current stride of the process
+ * uint32_t lab6_priority;          // FOR LAB6 ONLY: the priority of process, set by lab6_set_priority(uint32_t)
+ */
+proc->rq = NULL;
+list_init(&(proc->run_link));
+proc->time_slice = 0;
+skew_heap_init(&(proc->lab6_run_pool));
+proc->lab6_stride = 0;
+proc->lab6_priority = 0;
+```
+
+---
+
+## 练习1: 使用 Round Robin 调度算法（不需要编码）
+
+完成练习0后，建议大家比较一下（可用kdiff3等文件比较软件）个人完成的lab5和练习0完成后的刚修改的lab6之间的区别，分析了解lab6采用RR调度算法后的执行过程。执行make grade，大部分测试用例应该通过。但执行priority.c应该过不去。
+
+请在实验报告中完成：
+
+请理解并分析sched_class中各个函数指针的用法，并接合Round Robin 调度算法描ucore的调度执行过程
+请在实验报告中简要说明如何设计实现“多级反馈队列调度算法”，给出概要设计，鼓励给出详细设计
+> 答：(1). sched_class如下所示：
+```
+struct sched_class {
+    const char *name;
+    void (*init)(struct run_queue *rq);
+    void (*enqueue)(struct run_queue *rq, struct proc_struct *proc);
+    void (*dequeue)(struct run_queue *rq, struct proc_struct *proc);
+    struct proc_struct *(*pick_next)(struct run_queue *rq);
+    void (*proc_tick)(struct run_queue *rq, struct proc_struct *proc);
+};
+```
+> name为调度器的名字；
+(*init)为初始化运行队列；
+(*enqueue)为将进程proc插入队列rq；
+(*dequeue)为将进程proc从队列rq中删除；
+(*pick_next)为返回运行队列中下一个可执行的进程；
+(*proc_tick)为timetick处理函数
+
+(2). ucore调度执行(Round Robin)的过程如下所示：
+> ucore中schedule函数完成了与调度框架和调度算法相关的三件事情：把当前继续占用CPU执行的运行进程放入到就绪进程队列中，从就绪进程队列中选择一个“合适”就绪进程，把这个“合适”的就绪进程从就绪进程队列中摘除。结合具体的RR调度算法，RR_enqueue把某进程的进程控制块指针放入到rq的队尾，且如果进程控制块的时间片为0，则需要把它重置为rq成员变量max_time_slice；RR_pick_next选取就绪进程队列rq中的队头队列元素，并把队列元素转换成进程控制块指针；RR_dequeue把就绪进程队列rq的进程控制块指针的队列元素删除，并把表示就绪进程个数的proc_num减一；RR_proc_tick函数在每次time到时后，trap函数将会间接调用此函数来把当前执行进程的时间片time_slice减一，如果time_slice降到零，则设置此进程成员变量need_resched标识为1，在下一次中断到来后执行trap函数时，会因need_resched为1而执行schedule函数，从而把当前执行进程放回到就绪队列的末尾，而从就绪队列头取出在就绪队列上等待时间最久的那个就绪进程执行。
+
+(3). “多级反馈队列调度算法”设计概要：
+> 在ucore中维护n条rq，分别设定从大到小的n个优先级以及n个从小到大的max_time_slice，每次ucore进行调度时从根据优先级的高低依次访问n个rq，找到优先级最高的队列根据RR调度算法进行访问。
+
+---
+
+## 练习2: 实现 Stride Scheduling 调度算法（需要编码）
+
+首先需要换掉RR调度器的实现，即用default_sched_stride_c覆盖default_sched.c。然后根据此文件和后续文档对Stride度器的相关描述，完成Stride调度算法的实现。
+执行：make grade。如果所显示的应用程序检测都输出ok，则基本正确。如果只是priority.c过不去，可执行 make run-priority 命令来单独调试它。大致执行结果可看附录。（ 使用的是 qemu-1.0.1 ）。
+请在实验报告中简要说明你的设计实现过程。
+> 答：可以参考注释与伪代码完成Stride Scheduling调度算法：
+(1). 完成init(rq)：初始化rq->run_list以及rq->lab6_run_pool和rq->proc_num；
+```
+list_init(&(rq->run_list));
+rq->lab6_run_pool = NULL;
+rq->proc_num = 0;
+```
+(2). 完成enqueue(rq, proc)：其中要注意的是rq->lab6_run_pool本身就为指针所以不需要再取地址；
+```
+rq->lab6_run_pool = skew_heap_insert(rq->lab6_run_pool, &(proc->lab6_run_pool), proc_stride_comp_f);
+if (proc->time_slice==0 || proc->time_slice>rq->max_time_slice)
+	proc->time_slice = rq->max_time_slice;
+proc->rq = rq;
+rq->proc_num ++;
+```
+(3). 完成dequeue(rq, proc)：同理rq->lab6_run_pool不需要再取地址
+```
+rq->lab6_run_pool = skew_heap_remove(rq->lab6_run_pool, &(proc->lab6_run_pool), proc_stride_comp_f); 
+rq->proc_num --;
+```
+(4). 完成pick_next(rq)：这部分主要是要考虑到lab6_priority位0的情况，否则程序可能会崩溃，因为内核线程的lab6_priority是为0的；
+```
+if (rq->lab6_run_pool == NULL)
+	return NULL;
+struct proc_struct *p = le2proc(rq->lab6_run_pool, lab6_run_pool);
+if (p->lab6_priority == 0)
+	p->lab6_stride = p->lab6_stride + BIG_STRIDE;
+else
+	p->lab6_stride = p->lab6_stride + BIG_STRIDE/p->lab6_priority;
+return p;
+```
+(5). 完成proc_tick(rq, proc)：可参考RR调度算法，比较容易
+```
+if (proc->time_slice > 0)
+	proc->time_slice--;
+if (proc->time_slice == 0)
+	proc->need_resched = 1;
+```
+
