@@ -123,7 +123,7 @@ default_alloc_pages(size_t n) {
     return NULL;
 }
 
-//static void
+static void
 default_free_pages(struct Page *base, size_t n) {
     assert(n > 0);
     assert(PageReserved(base));
