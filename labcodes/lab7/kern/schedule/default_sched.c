@@ -154,3 +154,4 @@ struct sched_class default_sched_class = {
      .pick_next = stride_pick_next,
      .proc_tick = stride_proc_tick,
 };
+

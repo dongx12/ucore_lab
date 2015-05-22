@@ -589,7 +589,8 @@ sfs_io_nolock(struct sfs_fs *sfs, struct sfs_inode *sin, void *buf, off_t offset
     uint32_t blkno = offset / SFS_BLKSIZE;          // The NO. of Rd/Wr begin block
     uint32_t nblks = endpos / SFS_BLKSIZE - blkno;  // The size of Rd/Wr blocks
 
-  //LAB8:EXERCISE1 YOUR CODE HINT: call sfs_bmap_load_nolock, sfs_rbuf, sfs_rblock,etc. read different kind of blocks in file
+    //LAB8:EXERCISE1 2012011361
+    //HINT: call sfs_bmap_load_nolock, sfs_rbuf, sfs_rblock,etc. read different kind of blocks in file
 	/*
 	 * (1) If offset isn't aligned with the first block, Rd/Wr some content from offset to the end of the first block
 	 *       NOTICE: useful function: sfs_bmap_load_nolock, sfs_buf_op
@@ -598,7 +599,49 @@ sfs_io_nolock(struct sfs_fs *sfs, struct sfs_inode *sin, void *buf, off_t offset
 	 *       NOTICE: useful function: sfs_bmap_load_nolock, sfs_block_op
      * (3) If end position isn't aligned with the last block, Rd/Wr some content from begin to the (endpos % SFS_BLKSIZE) of the last block
 	 *       NOTICE: useful function: sfs_bmap_load_nolock, sfs_buf_op	
-	*/
+	 */
+
+    //判断offset是否为一个block的开头
+    blkoff = offset % SFS_BLKSIZE;
+    if (blkoff != 0) {
+    	size = (nblks != 0) ? (SFS_BLKSIZE - blkoff) : (endpos - offset);
+    	//sfs_bmap_load_nolock : according to the DIR's inode and the logical index of block in inode, find the NO. of disk block.
+    	if ((ret = sfs_bmap_load_nolock(sfs, sin, blkno, &ino)) != 0)
+    		goto out;
+    	//offset表示偏移量
+    	if ((ret = sfs_buf_op(sfs, buf, size, ino, blkoff)) != 0)
+    		goto out;
+    	alen += size;
+    	if (nblks == 0)
+    		goto out;
+    	buf += size;
+    	blkno++; //读写操作的开始block编号
+    	nblks--; //未读的block数目
+    }
+    //读取中间整块的blcok
+    size = SFS_BLKSIZE;
+	while (nblks != 0) {
+		if ((ret = sfs_bmap_load_nolock(sfs, sin, blkno, &ino)) != 0)
+			goto out;
+		//1表示读1个block
+		if ((ret = sfs_block_op(sfs, buf, ino, 1)) != 0)
+			goto out;
+
+		alen += size;
+		buf += size;
+		blkno++; //读写操作的开始block编号
+		nblks--; //未读的block数目
+	}
+	//判断endpos是否为一个block的开头
+	if ((size = endpos % SFS_BLKSIZE) != 0) {
+		if ((ret = sfs_bmap_load_nolock(sfs, sin, blkno, &ino)) != 0)
+			goto out;
+		//0表示偏移量，即从该block头开始
+		if ((ret = sfs_buf_op(sfs, buf, size, ino, 0)) != 0)
+			goto out;
+
+		alen += size;
+	}
 out:
     *alenp = alen;
     if (offset + alen > sin->din->size) {
