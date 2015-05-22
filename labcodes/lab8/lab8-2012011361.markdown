@@ -28,44 +28,44 @@ sfs_bmap_load_nolock：将对应sfs_inode的第index个索引指向的block的�
 实现代码如下：
 ```
 //判断offset是否为一个block的开头
-    blkoff = offset % SFS_BLKSIZE;
-    if (blkoff != 0) {
-    	size = (nblks != 0) ? (SFS_BLKSIZE - blkoff) : (endpos - offset);
-    	//sfs_bmap_load_nolock : according to the DIR's inode and the logical index of block in inode, find the NO. of disk block.
-    	if ((ret = sfs_bmap_load_nolock(sfs, sin, blkno, &ino)) != 0)
-    		goto out;
-    	//offset表示偏移量
-    	if ((ret = sfs_buf_op(sfs, buf, size, ino, blkoff)) != 0)
-    		goto out;
-    	alen += size;
-    	if (nblks == 0)
-    		goto out;
-    	buf += size;
-    	blkno++; //读写操作的开始block编号
-    	nblks--; //未读的block数目
-    }
-    //读取中间整块的blcok
-    size = SFS_BLKSIZE;
-	while (nblks != 0) {
-		if ((ret = sfs_bmap_load_nolock(sfs, sin, blkno, &ino)) != 0)
-			goto out;
-		//1表示读1个block
-		if ((ret = sfs_block_op(sfs, buf, ino, 1)) != 0)
-			goto out;
-		alen += size;
-		buf += size;
-		blkno++; //读写操作的开始block编号
-		nblks--; //未读的block数目
-	}
-	//判断endpos是否为一个block的开头
-	if ((size = endpos % SFS_BLKSIZE) != 0) {
-		if ((ret = sfs_bmap_load_nolock(sfs, sin, blkno, &ino)) != 0)
-			goto out;
-		//0表示偏移量，即从该block头开始
-		if ((ret = sfs_buf_op(sfs, buf, size, ino, 0)) != 0)
-			goto out;
-		alen += size;
-	}
+blkoff = offset % SFS_BLKSIZE;
+if (blkoff != 0) {
+    size = (nblks != 0) ? (SFS_BLKSIZE - blkoff) : (endpos - offset);
+    //sfs_bmap_load_nolock : according to the DIR's inode and the logical index of block in inode, find the NO. of disk block.
+    if ((ret = sfs_bmap_load_nolock(sfs, sin, blkno, &ino)) != 0)
+    	goto out;
+    //offset表示偏移量
+    if ((ret = sfs_buf_op(sfs, buf, size, ino, blkoff)) != 0)
+    	goto out;
+    alen += size;
+    if (nblks == 0)
+    	goto out;
+    buf += size;
+    blkno++; //读写操作的开始block编号
+    nblks--; //未读的block数目
+}
+//读取中间整块的blcok
+size = SFS_BLKSIZE;
+while (nblks != 0) {
+	if ((ret = sfs_bmap_load_nolock(sfs, sin, blkno, &ino)) != 0)
+		goto out;
+	//1表示读1个block
+	if ((ret = sfs_block_op(sfs, buf, ino, 1)) != 0)
+		goto out;
+	alen += size;
+	buf += size;
+	blkno++; //读写操作的开始block编号
+	nblks--; //未读的block数目
+}
+//判断endpos是否为一个block的开头
+if ((size = endpos % SFS_BLKSIZE) != 0) {
+	if ((ret = sfs_bmap_load_nolock(sfs, sin, blkno, &ino)) != 0)
+		goto out;
+	//0表示偏移量，即从该block头开始
+	if ((ret = sfs_buf_op(sfs, buf, size, ino, 0)) != 0)
+		goto out;
+	alen += size;
+}
 ```
 > 为实现“UNIX的PIPE机制”可以新增函数pipe_create用来创建管道，函数pipe_read和pipe_write来负责管道的读和写，同时可用环形链表作为数据区，用信号量来控制读写的互斥，如果缓冲区满或不能进行读写时睡眠，可以继续操作时被唤醒。
 
